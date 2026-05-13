@@ -1,15 +1,35 @@
+const defaultCorsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': '*',
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Allow-Credentials': 'true',
+};
+
+function corsResponse(body: BodyInit | null, init: ResponseInit = {}) {
+  return new Response(body, {
+    ...init,
+    headers: {
+      ...defaultCorsHeaders,
+      ...(init.headers as Record<string, string> | undefined),
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: any) {
     try {
       const url = new URL(request.url);
       const method = request.method;
 
-      // 1. GET Request: Fetch tracking info (e.g., /?train_number=11272)
+      if (method === 'OPTIONS') {
+        return corsResponse(null, { status: 204 });
+      }
+
       if (method === 'GET') {
         const trainNumber = url.searchParams.get('train_number');
-        
+
         if (!trainNumber) {
-          return new Response('Missing train_number query parameter', { status: 400 });
+          return corsResponse('Missing train_number query parameter', { status: 400 });
         }
 
         const result = await env.DB.prepare(`
@@ -17,22 +37,27 @@ export default {
         `).bind(trainNumber).first();
 
         if (!result) {
-          return new Response('Train number not found', { status: 404 });
+          return corsResponse('Train number not found', { status: 404 });
         }
 
-        return Response.json(result);
+        return corsResponse(JSON.stringify(result), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json;charset=UTF-8' },
+        });
       }
 
-      // 2. POST Request: Insert/update using URL parameters (e.g., /?train_number=11272&loco_number=52352&user_identifier=ip)
       if (method === 'POST') {
         const trainNumber = url.searchParams.get('train_number');
         const locoNumber = url.searchParams.get('loco_number');
-        
-        // Automatically fall back to Cloudflare's connecting IP header if user_identifier parameter is omitted
-        const userIdentifier = url.searchParams.get('user_identifier') || request.headers.get('cf-connecting-ip') || 'unknown';
+        const userIdentifier =
+          url.searchParams.get('user_identifier') ||
+          request.headers.get('cf-connecting-ip') ||
+          'unknown';
 
         if (!trainNumber || !locoNumber) {
-          return new Response('Missing required parameters: train_number and loco_number are required', { status: 400 });
+          return corsResponse('Missing required parameters: train_number and loco_number are required', {
+            status: 400,
+          });
         }
 
         await env.DB.prepare(`
@@ -40,17 +65,19 @@ export default {
           VALUES (?, ?, ?)
         `).bind(trainNumber, locoNumber, userIdentifier).run();
 
-        return Response.json({ 
-          success: true, 
-          message: 'Loco number saved successfully',
-          saved_data: { train_number: trainNumber, loco_number: locoNumber, user_identifier: userIdentifier }
-        });
+        return corsResponse(
+          JSON.stringify({
+            success: true,
+            message: 'Loco number saved successfully',
+            saved_data: { train_number: trainNumber, loco_number: locoNumber, user_identifier: userIdentifier },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json;charset=UTF-8' } },
+        );
       }
 
-      return new Response('Method Not Allowed', { status: 405 });
-
+      return corsResponse('Method Not Allowed', { status: 405 });
     } catch (error: any) {
-      return new Response(error.message, { status: 500 });
+      return corsResponse(error.message, { status: 500 });
     }
-  }
+  },
 };
