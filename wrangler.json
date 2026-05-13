@@ -1,0 +1,16 @@
+{
+	"compatibility_date": "2025-10-08",
+	"main": "src/index.ts",
+	"name": "loco-tracking-worker",
+	"upload_source_maps": true,
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_id": "a675cc0e-ee92-42cb-9d85-5db8ee162c5f",
+			"database_name": "railtrackings"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}
