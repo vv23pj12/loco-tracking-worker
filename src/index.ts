@@ -15,6 +15,13 @@ function corsResponse(body: BodyInit | null, init: ResponseInit = {}) {
   });
 }
 
+function isValidDate(dateStr: string): boolean {
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(dateStr);
+  if (!iso) return false;
+  const d = new Date(dateStr);
+  return !isNaN(d.getTime());
+}
+
 export default {
   async fetch(request: Request, env: any) {
     try {
@@ -25,9 +32,9 @@ export default {
         return corsResponse(null, { status: 204 });
       }
 
+      // GET — fetch loco tracking record by train_number
       if (method === 'GET') {
         const trainNumber = url.searchParams.get('train_number');
-
         if (!trainNumber) {
           return corsResponse('Missing train_number query parameter', { status: 400 });
         }
@@ -46,30 +53,52 @@ export default {
         });
       }
 
+      // POST — insert or replace loco tracking record
       if (method === 'POST') {
-        const trainNumber = url.searchParams.get('train_number');
-        const locoNumber = url.searchParams.get('loco_number');
+        const trainNumber    = url.searchParams.get('train_number');
+        const locoNumber     = url.searchParams.get('loco_number');
+        const startDateParam = url.searchParams.get('startDate');
         const userIdentifier =
           url.searchParams.get('user_identifier') ||
           request.headers.get('cf-connecting-ip') ||
           'unknown';
 
         if (!trainNumber || !locoNumber) {
-          return corsResponse('Missing required parameters: train_number and loco_number are required', {
-            status: 400,
-          });
+          return corsResponse(
+            'Missing required parameters: train_number and loco_number are required',
+            { status: 400 },
+          );
+        }
+
+        // Validate startDate if provided; otherwise default to today (UTC)
+        let startDate: string;
+        if (startDateParam) {
+          if (!isValidDate(startDateParam)) {
+            return corsResponse(
+              'Invalid startDate format. Expected YYYY-MM-DD (e.g. 2026-05-27)',
+              { status: 400 },
+            );
+          }
+          startDate = startDateParam;
+        } else {
+          startDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
         }
 
         await env.DB.prepare(`
-          INSERT OR REPLACE INTO loco_tracking (train_number, loco_number, user_identifier)
-          VALUES (?, ?, ?)
-        `).bind(trainNumber, locoNumber, userIdentifier).run();
+          INSERT OR REPLACE INTO loco_tracking (train_number, loco_number, user_identifier, startDate)
+          VALUES (?, ?, ?, ?)
+        `).bind(trainNumber, locoNumber, userIdentifier, startDate).run();
 
         return corsResponse(
           JSON.stringify({
             success: true,
             message: 'Loco number saved successfully',
-            saved_data: { train_number: trainNumber, loco_number: locoNumber, user_identifier: userIdentifier },
+            saved_data: {
+              train_number:    trainNumber,
+              loco_number:     locoNumber,
+              user_identifier: userIdentifier,
+              startDate,
+            },
           }),
           { status: 200, headers: { 'Content-Type': 'application/json;charset=UTF-8' } },
         );
