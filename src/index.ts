@@ -15,11 +15,22 @@ function corsResponse(body: BodyInit | null, init: ResponseInit = {}) {
   });
 }
 
+function jsonResponse(data: unknown, status = 200) {
+  return corsResponse(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json;charset=UTF-8' },
+  });
+}
+
 function isValidDate(dateStr: string): boolean {
   const iso = /^\d{4}-\d{2}-\d{2}$/.test(dateStr);
   if (!iso) return false;
   const d = new Date(dateStr);
   return !isNaN(d.getTime());
+}
+
+function getTodayUTC(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export default {
@@ -32,31 +43,45 @@ export default {
         return corsResponse(null, { status: 204 });
       }
 
-      // GET — fetch loco tracking record by train_number
+      // GET — fetch loco tracking record by train_number + startDate
       if (method === 'GET') {
         const trainNumber = url.searchParams.get('train_number');
+        const startDateParam = url.searchParams.get('startDate');
+
         if (!trainNumber) {
-          return corsResponse('Missing train_number query parameter', { status: 400 });
+          return jsonResponse({ error: 'Missing train_number query parameter' }, 400);
         }
 
-        const result = await env.DB.prepare(`
-          SELECT * FROM loco_tracking WHERE train_number = ?
-        `).bind(trainNumber).first();
+        let result;
 
+        if (startDateParam) {
+          // Validate the date format
+          if (!isValidDate(startDateParam)) {
+            return jsonResponse({ error: 'Invalid startDate format. Expected YYYY-MM-DD' }, 400);
+          }
+          // Fetch for specific train + date combo
+          result = await env.DB.prepare(
+            `SELECT * FROM loco_tracking WHERE train_number = ? AND startDate = ?`
+          ).bind(trainNumber, startDateParam).first();
+        } else {
+          // No date provided — return the most recent entry for this train
+          result = await env.DB.prepare(
+            `SELECT * FROM loco_tracking WHERE train_number = ? ORDER BY startDate DESC LIMIT 1`
+          ).bind(trainNumber).first();
+        }
+
+        // Return null (not 404) when no record exists — lets client distinguish "no data" from errors
         if (!result) {
-          return corsResponse('Train number not found', { status: 404 });
+          return jsonResponse(null, 200);
         }
 
-        return corsResponse(JSON.stringify(result), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json;charset=UTF-8' },
-        });
+        return jsonResponse(result, 200);
       }
 
       // POST — insert or replace loco tracking record
       if (method === 'POST') {
-        const trainNumber    = url.searchParams.get('train_number');
-        const locoNumber     = url.searchParams.get('loco_number');
+        const trainNumber = url.searchParams.get('train_number');
+        const locoNumber = url.searchParams.get('loco_number');
         const startDateParam = url.searchParams.get('startDate');
         const userIdentifier =
           url.searchParams.get('user_identifier') ||
@@ -64,9 +89,9 @@ export default {
           'unknown';
 
         if (!trainNumber || !locoNumber) {
-          return corsResponse(
-            'Missing required parameters: train_number and loco_number are required',
-            { status: 400 },
+          return jsonResponse(
+            { error: 'Missing required parameters: train_number and loco_number are required' },
+            400
           );
         }
 
@@ -74,39 +99,36 @@ export default {
         let startDate: string;
         if (startDateParam) {
           if (!isValidDate(startDateParam)) {
-            return corsResponse(
-              'Invalid startDate format. Expected YYYY-MM-DD (e.g. 2026-05-27)',
-              { status: 400 },
+            return jsonResponse(
+              { error: 'Invalid startDate format. Expected YYYY-MM-DD (e.g. 2026-05-27)' },
+              400
             );
           }
           startDate = startDateParam;
         } else {
-          startDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+          startDate = getTodayUTC();
         }
 
-        await env.DB.prepare(`
-          INSERT OR REPLACE INTO loco_tracking (train_number, loco_number, user_identifier, startDate)
-          VALUES (?, ?, ?, ?)
-        `).bind(trainNumber, locoNumber, userIdentifier, startDate).run();
+        await env.DB.prepare(
+          `INSERT OR REPLACE INTO loco_tracking (train_number, startDate, loco_number, user_identifier, updated_at)
+           VALUES (?, ?, ?, ?, ?)`
+        ).bind(trainNumber, startDate, locoNumber, userIdentifier, new Date().toISOString()).run();
 
-        return corsResponse(
-          JSON.stringify({
-            success: true,
-            message: 'Loco number saved successfully',
-            saved_data: {
-              train_number:    trainNumber,
-              loco_number:     locoNumber,
-              user_identifier: userIdentifier,
-              startDate,
-            },
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json;charset=UTF-8' } },
-        );
+        return jsonResponse({
+          success: true,
+          message: 'Loco number saved successfully',
+          saved_data: {
+            train_number: trainNumber,
+            loco_number: locoNumber,
+            startDate,
+            user_identifier: userIdentifier,
+          },
+        }, 200);
       }
 
-      return corsResponse('Method Not Allowed', { status: 405 });
+      return jsonResponse({ error: 'Method Not Allowed' }, 405);
     } catch (error: any) {
-      return corsResponse(error.message, { status: 500 });
+      return jsonResponse({ error: error.message }, 500);
     }
   },
 };
