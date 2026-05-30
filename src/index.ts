@@ -43,11 +43,39 @@ export default {
         return corsResponse(null, { status: 204 });
       }
 
-      // GET — fetch loco tracking record by train_number + startDate
+      // GET — fetch loco tracking record by train_number + startDate, or search locos
       if (method === 'GET') {
         const trainNumber = url.searchParams.get('train_number');
         const startDateParam = url.searchParams.get('startDate');
+        const search = url.searchParams.get('search') || url.searchParams.get('q'); // support ?search= or ?q=
 
+        // If search is provided, we do loco search
+        if (search !== null) {
+          let results;
+          if (search.trim() === '') {
+            // Empty search: return the 10 most recent locos overall
+            results = await env.DB.prepare(
+              `SELECT loco_number, train_number, MAX(startDate) as startDate 
+               FROM loco_tracking 
+               GROUP BY loco_number 
+               ORDER BY startDate DESC 
+               LIMIT 10`
+            ).all();
+          } else {
+            // Search locos matching the query
+            results = await env.DB.prepare(
+              `SELECT loco_number, train_number, MAX(startDate) as startDate 
+               FROM loco_tracking 
+               WHERE loco_number LIKE ? 
+               GROUP BY loco_number 
+               ORDER BY startDate DESC 
+               LIMIT 10`
+            ).bind(`${search}%`).all();
+          }
+          return jsonResponse({ results: results.results }, 200);
+        }
+
+        // Original logic for specific train_number
         if (!trainNumber) {
           return jsonResponse({ error: 'Missing train_number query parameter' }, 400);
         }
